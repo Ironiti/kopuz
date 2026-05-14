@@ -1,3 +1,4 @@
+use super::converter::convert_to_mp3;
 use super::metadata::read;
 use super::models::Library;
 use async_recursion::async_recursion;
@@ -49,11 +50,42 @@ async fn scan_directory_internal(
         let progress = on_progress.clone();
 
         lib = tokio::task::spawn_blocking(move || {
+            // Create a temporary directory for converted files
+            let temp_dir = std::env::temp_dir().join("kopuz_converted");
+            let _ = std::fs::create_dir_all(&temp_dir);
+
             for path in audio_files {
-                if let Some(name) = path.file_name() {
+                let name = path.file_name();
+                if let Some(name) = name {
                     progress(name.to_string_lossy().into_owned());
                 }
-                read(&path, &cover_cache_clone, &mut lib);
+                
+                // Check if file needs conversion (not MP3)
+                let file_to_read = if path.extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase())
+                    .as_deref() != Some("mp3")
+                {
+                    // Try to convert to MP3
+                    match convert_to_mp3(&path, &temp_dir) {
+                        Ok(converted_path) => {
+                            if let Some(name) = name {
+                                progress(format!("Converted: {}", name.to_string_lossy()));
+                            }
+                            converted_path
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to convert {}: {}", path.display(), e);
+                            // If conversion fails, try to read the original file
+                            path
+                        }
+                    }
+                } else {
+                    // Already MP3, use as is
+                    path
+                };
+                
+                read(&file_to_read, &cover_cache_clone, &mut lib);
             }
             lib
         })
@@ -78,9 +110,8 @@ async fn scan_directory_internal(
 }
 
 pub fn is_audio_file(path: &Path) -> bool {
-    let extensions = ["mp3", "flac", "m4a", "wav", "ogg", "opus", "mp4"];
-    path.extension()
-        .and_then(|s| s.to_str())
-        .map(|s| extensions.contains(&s.to_lowercase().as_str()))
-        .unwrap_or(false)
+    use super::converter::is_convertible_format;
+    
+    // Accept all convertible formats (audio and video)
+    is_convertible_format(path)
 }

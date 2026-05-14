@@ -1,5 +1,6 @@
 use crate::theme_editor::ThemeEditorPage;
 use ::server::provider::ProviderClient;
+use components::file_uploader::FileUploader;
 use components::settings_items::{
     BackBehaviorSelector, ChannelModeSelector, DiscordPresenceSettings, EqualizerPanel,
     LanguageSelector, MultiDirectoryPicker, MusicBrainzSettings, ServerSettings, SettingItem,
@@ -9,6 +10,8 @@ use components::settings_popups::{AddServerPopup, LoginPopup};
 use config::{AppConfig, MusicService, OfflineQuality};
 use dioxus::prelude::*;
 use hooks::use_player_controller::PlayerController;
+use reader::converter::{convert_to_mp3, is_ffmpeg_available};
+use std::path::PathBuf;
 
 #[component]
 pub fn Settings(config: Signal<AppConfig>) -> Element {
@@ -173,6 +176,41 @@ pub fn Settings(config: Signal<AppConfig>) -> Element {
                                     on_add: move |_| show_add_server.set(true),
                                     on_delete: move |_| config.write().server = None,
                                     on_login: move |_| show_login.set(true),
+                                }
+                            }
+                        }
+
+                        if !cfg!(target_arch = "wasm32") {
+                            SettingItem {
+                                title: i18n::t("add_audio_video_files").to_string(),
+                                control: rsx! {
+                                    div { class: "flex flex-col gap-2",
+                                        FileUploader {
+                                            on_files_selected: move |files: Vec<PathBuf>| {
+                                                let music_dirs = config.read().music_directory.clone();
+                                                if music_dirs.is_empty() {
+                                                    // Show error: no music directory configured
+                                                    return;
+                                                }
+                                                
+                                                let target_dir = music_dirs[0].clone();
+                                                
+                                                spawn(async move {
+                                                    for file in files {
+                                                        if let Err(e) = convert_to_mp3(&file, &target_dir) {
+                                                            tracing::error!("Failed to convert {}: {}", file.display(), e);
+                                                        }
+                                                    }
+                                                });
+                                            },
+                                            accept_formats: None,
+                                        }
+                                        if !is_ffmpeg_available() {
+                                            div { class: "text-xs text-yellow-500",
+                                                "{i18n::t(\"ffmpeg_not_found\")}"
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
